@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>Mini Chat com Áudio — com Usuário</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body{font-family:Arial, sans-serif;background:#f2f2f2;margin:0;padding:0;color:#222;}
+    .wrap{max-width:560px;margin:20px auto;padding:0 10px;}
+    .userline{margin:6px 0 10px 6px;display:flex;align-items:center;gap:8px;}
+    .userline label{font-size:16px;}
+    .userline input{width:220px;padding:6px 8px;border:1px solid #888;border-radius:4px;}
+    .chat-container{background:#fff;border-radius:10px;box-shadow:0 0 10px rgba(0,0,0,.08);display:flex;flex-direction:column;height:78vh;}
+    .chat-messages{flex:1;overflow:auto;padding:16px;background:#fafafa;}
+    .message{margin-bottom:12px;padding:10px 14px;border-radius:12px;max-width:82%;word-wrap:break-word;white-space:pre-wrap;}
+    .user{background:#dcf8c6;align-self:flex-end;}
+    .bot{background:#eee;align-self:flex-start;}
+    .chat-input{display:flex;flex-direction:column;gap:8px;padding:12px;border-top:1px solid #ddd;background:#fff;}
+    input[type="text"],input[type="file"]{padding:10px;border:1px solid #ccc;border-radius:8px;}
+    button{padding:10px;border:none;background:#25d366;color:#fff;border-radius:8px;cursor:pointer;}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="userline">
+      <label for="userId">Usuário:</label>
+      <input id="userId" placeholder="ex.: prof-ana-y2" />
+    </div>
+
+    <div class="chat-container">
+      <div id="chat" class="chat-messages"></div>
+      <div class="chat-input">
+        <input type="text" id="msg" placeholder="Digite sua mensagem..." />
+        <input type="file" id="image" accept="image/*" />
+        <button id="recordBtn" type="button">🎤 Gravar Áudio</button>
+        <button id="sendBtn" type="button">Enviar</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // === Ajuste a URL do seu webhook n8n ===
+    const webhookURL = 'https://teste.maplebearjardins.pro/webhook-test/0fdc2b86-d512-49fa-8091-24ffde75cb1f';
+
+    // === Elementos ===
+    const chat = document.getElementById('chat');
+    const input = document.getElementById('msg');
+    const imageInput = document.getElementById('image');
+    const recordBtn = document.getElementById('recordBtn');
+    const sendBtn = document.getElementById('sendBtn');
+    const userIdEl = document.getElementById('userId');
+
+    // === Estado de áudio ===
+    let audioBlob = null;
+    let mediaRecorder = null;
+    let isRecording = false;
+
+    // === Usuário (persistência local) ===
+    function loadUser(){
+      const u = localStorage.getItem('chat_user') || '';
+      if(u) userIdEl.value = u;
+      else userIdEl.focus();
+    }
+    function saveUser(){
+      const u = (userIdEl.value || '').trim();
+      if(u) localStorage.setItem('chat_user', u);
+    }
+    userIdEl.addEventListener('change', saveUser);
+    userIdEl.addEventListener('blur', saveUser);
+    window.addEventListener('DOMContentLoaded', loadUser);
+
+    // === Helpers UI ===
+    function addMsg(text, cls){
+      const d = document.createElement('div');
+      d.className = 'message '+cls;
+      d.textContent = text;
+      chat.appendChild(d);
+      chat.scrollTop = chat.scrollHeight;
+    }
+
+    // === Gravação de áudio ===
+    recordBtn.addEventListener('click', async () => {
+      if (isRecording) {
+        mediaRecorder.stop();
+        recordBtn.textContent = '🎤 Gravar Áudio';
+        isRecording = false;
+      } else {
+        try{
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          mediaRecorder = new MediaRecorder(stream);
+          const chunks = [];
+          mediaRecorder.ondataavailable = e => chunks.push(e.data);
+          mediaRecorder.onstop = () => {
+            audioBlob = new Blob(chunks, { type: 'audio/webm' });
+            addMsg('[Áudio gravado]', 'user');
+          };
+          mediaRecorder.start();
+          recordBtn.textContent = '⏹️ Parar Gravação';
+          isRecording = true;
+        }catch(err){
+          addMsg('❌ Permissão de microfone negada.', 'bot');
+          console.error(err);
+        }
+      }
+    });
+
+    // === Envio ===
+    async function enviar(){
+      const texto = input.value.trim();
+      const imageFile = imageInput.files[0];
+      const userId = (userIdEl.value || '').trim();
+      saveUser();
+
+      if(!texto && !imageFile && !audioBlob) return;
+      if(!userId){
+        addMsg('⚠️ Informe o campo "Usuário" antes de enviar.', 'bot');
+        userIdEl.focus();
+        return;
+      }
+
+      addMsg(texto || '[Mídia enviada]', 'user');
+      input.value = '';
+      imageInput.value = '';
+
+      const formData = new FormData();
+      formData.append('mensagem', texto);
+      formData.append('user_id', userId);      // body (para o Set identity/Redis)
+      formData.append('sessionId', userId);    // compat
+      if(imageFile) formData.append('imagem', imageFile);
+      if(audioBlob){
+        formData.append('audio', audioBlob, 'gravacao.webm');
+        audioBlob = null;
+      }
+
+      try{
+        const resp = await fetch(webhookURL, {
+          method: 'POST',
+          body: formData,
+          headers: {'x-session-id': userId}   // header (opcional, mas útil)
+        });
+        const ct = resp.headers.get('content-type') || '';
+        if(ct.includes('application/json')){
+          const data = await resp.json();
+          addMsg(data.resposta || JSON.stringify(data), 'bot');
+        }else{
+          const txt = await resp.text();
+          addMsg(txt || '✅ Mensagem recebida pelo n8n', 'bot');
+        }
+      }catch(e){
+        addMsg('❌ Erro ao enviar para o n8n', 'bot');
+        console.error(e);
+      }
+    }
+    sendBtn.addEventListener('click', enviar);
+    // Enter para enviar
+    input.addEventListener('keydown', (e)=> { if(e.key==='Enter'){ e.preventDefault(); enviar(); } });
+  </script>
+</body>
+</html>
