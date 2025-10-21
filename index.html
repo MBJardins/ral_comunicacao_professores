@@ -69,11 +69,37 @@
     userIdEl.addEventListener('blur', saveUser);
     window.addEventListener('DOMContentLoaded', loadUser);
 
+    // === Renderização segura de Markdown simples ===
+    // Suporta: **negrito**, *itálico*, links e \n -> <br>
+    function renderMarkdown(raw) {
+      if (!raw) return "";
+      // 1) escapamos HTML para evitar XSS
+      let s = raw
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+
+      // 2) **negrito**
+      s = s.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+      // 3) *itálico*  (aplicado depois do negrito para evitar conflito)
+      s = s.replace(/\*(.+?)\*/g, "<em>$1</em>");
+      // 4) links simples
+      s = s.replace(
+        /(https?:\/\/[^\s]+)|(www\.[^\s]+)/g,
+        (m) => `<a href="${m.startsWith('http') ? m : 'http://' + m}" target="_blank" rel="noopener noreferrer">${m}</a>`
+      );
+      // 5) quebras de linha
+      s = s.replace(/\n/g, "<br>");
+      return s;
+    }
+
     // === Helpers UI ===
     function addMsg(text, cls){
       const d = document.createElement('div');
-      d.className = 'message '+cls;
-      d.textContent = text;
+      d.className = 'message ' + cls;
+      // usamos innerHTML com conversão segura para aceitar **negrito**
+      d.innerHTML = renderMarkdown(text || "");
       chat.appendChild(d);
       chat.scrollTop = chat.scrollHeight;
     }
